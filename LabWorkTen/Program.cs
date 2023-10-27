@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -57,12 +58,16 @@ namespace YourNamespace.StockApp
     {
         static async Task Main()
         {
-            var str = ReadFromFile(); //read
-            foreach (var st in str) //call for filling
+            List<string> str = ReadFromFile(); //read
+
+            static List<string> ReadFromFile()
             {
-                await Task.Delay(TimeSpan.FromSeconds(1));
-                await FillAsync(st);
+                List<string> tickers = File.ReadAllLines(@"C:\Users\gkras\OneDrive\Рабочий стол\ticker.txt").ToList();
+                Console.WriteLine("The file has been read");
+                return tickers;
             }
+
+            await ProcessTickersAsyncVoid(str);
 
             Console.WriteLine("Введите тикер акции для проверки:");
             var ticker = Console.ReadLine(); // find the state
@@ -79,7 +84,6 @@ namespace YourNamespace.StockApp
      .Select(result => result.TodaysCondition) //select TC
      .FirstOrDefault(); //show
 
-
                 if (todaysCondition != null)
                 {
                     string state = todaysCondition.State;
@@ -90,77 +94,102 @@ namespace YourNamespace.StockApp
                     Console.WriteLine($"For this ticker {ticker} there is no data");
                 }
             }
-           
+        }
 
-            static List<string> ReadFromFile()
+        static async Task ProcessTickersAsyncVoid(List<string> tickers)
+        {
+            var tasks = new List<Task>();
+
+            foreach (var ticker in tickers)
             {
-                List<string> tickers = File.ReadAllLines(@"C:\Users\gkras\OneDrive\Рабочий стол\ticker.txt").ToList();
-                Console.WriteLine("File has been read= " + tickers[0]);
-                return tickers;
+                tasks.Add(ProcessTickerAsync(ticker));
             }
-            static async Task FillAsync(string ticker) //using two apis
+
+            await Task.WhenAll(tasks);
+        }
+
+        static async Task ProcessTickerAsync(string ticker)
+        {
+            await FillAsync(ticker);
+        }
+
+      
+        static async Task FillAsync(string ticker) //using two apis
+        {
+
+            string apiUrlFirst = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1698253149&period2=1698339549&interval=1d&events=history&includeAdjustedClose=true";
+            string apiUrlSecond = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1698339549&period2=1698425949&interval=1d&events=history&includeAdjustedClose=true";
+           
+            decimal firstPrice = 0;
+            decimal secondPrice = 0;
+
+            using (HttpClient client = new HttpClient()) //first price
             {
-                string apiUrlFirst = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1697217000&period2=1697217280&interval=1d&events=history&includeAdjustedClose=true"; ;
-                string apiUrlSecond = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1697217290&period2=1697218290&interval=1d&events=history&includeAdjustedClose=true"; ;
-                decimal firstPrice = 0;
-                decimal secondPrice = 0;
-
-                using (HttpClient client = new HttpClient()) //first price
+                string responseBody = await client.GetStringAsync(apiUrlFirst);
+                Console.WriteLine("|" + ticker + "|" + responseBody);
+                string[] lines = responseBody.Split('\n');
+                lines = lines.Skip(1).ToArray();
+                foreach (string line in lines)
                 {
-                    string responseBody = await client.GetStringAsync(apiUrlFirst);
-                    string[] lines = responseBody.Split('\n');
-                    lines = lines.Skip(1).ToArray();
+                    string[] values = line.Split(',');
 
-                    foreach (string line in lines)
+                    string highStr = values[2];
+                    string lowStr = values[3];
+
+                    decimal high, low;
+
+                    if (decimal.TryParse(highStr, out high) && decimal.TryParse(lowStr, out low))
                     {
-                        string[] values = line.Split(',');
-                        decimal high = Convert.ToDecimal(values[2], CultureInfo.InvariantCulture);
-                        decimal low = Convert.ToDecimal(values[3], CultureInfo.InvariantCulture);
                         firstPrice = (high + low) / 2;
                     }
-                }
-
-                using (HttpClient client = new HttpClient()) //second price
-                {
-                    string responseBody = await client.GetStringAsync(apiUrlSecond);
-                    string[] lines = responseBody.Split('\n');
-                    lines = lines.Skip(1).ToArray();
-
-                    foreach (string line in lines)
+                    else
                     {
-                        string[] values = line.Split(',');
-                        decimal high = Convert.ToDecimal(values[2], CultureInfo.InvariantCulture);
-                        decimal low = Convert.ToDecimal(values[3], CultureInfo.InvariantCulture);
-                        secondPrice = (high + low) / 2;
+                        Console.WriteLine($"Impossible to parse {ticker}, so it's firstPrice = 0");
+                        firstPrice = 0;
+                        return;
                     }
-                }
-
-                using (var context = new TickerContext()) //adding data
-                {
-                    var newTicker = new Ticker { TickerSymbol = ticker };
-                    context.Tickers.Add(newTicker);
-                    context.SaveChanges();
-
-                    var newPrice = new Price
-                    {
-                        TickerId = newTicker.Id,
-                        PriceValue = secondPrice,
-                        Date = DateTime.Now
-                    };
-                    context.Prices.Add(newPrice);
-
-                    string statement = firstPrice < secondPrice ? "Has risen" : "Has fallen";
-                    var newTodaysCondition = new TodaysCondition
-                    {
-                        TickerId = newTicker.Id,
-                        State = statement
-                    };
-                    context.TodaysConditions.Add(newTodaysCondition);
-                    context.SaveChanges();
                 }
             }
 
+            using (HttpClient client = new HttpClient()) //second price
+            {
+                string responseBody = await client.GetStringAsync(apiUrlSecond);
+                Console.WriteLine("|" + ticker + "|" + responseBody);
+                string[] lines = responseBody.Split('\n');
+                lines = lines.Skip(1).ToArray();
+                foreach (string line in lines)
+                {
+                    string[] values = line.Split(',');
+                    decimal high = Convert.ToDecimal(values[2], CultureInfo.InvariantCulture);
+                    decimal low = Convert.ToDecimal(values[3], CultureInfo.InvariantCulture);
+                    secondPrice = (high + low) / 2;
+                }
+            }
+
+            using (var context = new TickerContext()) //adding data
+            {
+                var newTicker = new Ticker { TickerSymbol = ticker };
+                context.Tickers.Add(newTicker);
+                context.SaveChanges();
+                var newPrice = new Price
+                {
+                    TickerId = newTicker.Id,
+                    PriceValue = secondPrice,
+                    Date = DateTime.Now
+                };
+                context.Prices.Add(newPrice);
+
+                string statement = firstPrice < secondPrice ? "Has risen" : "Has fallen";
+                var newTodaysCondition = new TodaysCondition
+                {
+                    TickerId = newTicker.Id,
+                    State = statement
+                };
+                context.TodaysConditions.Add(newTodaysCondition);
+                context.SaveChanges();
+            }
         }
     }
 }
+
 
