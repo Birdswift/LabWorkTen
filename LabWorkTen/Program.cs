@@ -10,6 +10,9 @@ using Microsoft.EntityFrameworkCore.Design;
 
 namespace YourNamespace.StockApp
 {
+    /// <summary>
+    /// The migration has been added to change data in proccess 
+    /// </summary>
     public class TickerContext : DbContext
     {
         public DbSet<Ticker> Tickers { get; set; }
@@ -21,7 +24,7 @@ namespace YourNamespace.StockApp
             optionsBuilder.UseSqlServer(@"Server=(localdb)\mssqllocaldb;Database=TestDB;Trusted_Connection=True;MultipleActiveResultSets=true;");
         }
 
-        protected override void OnModelCreating(ModelBuilder modelBuilder) //migration to DB
+        protected override void OnModelCreating(ModelBuilder modelBuilder) //creates connection between tables by key
         {
             modelBuilder.Entity<Ticker>().HasKey(t => t.Id);
             modelBuilder.Entity<Price>().HasKey(p => p.Id);
@@ -64,43 +67,45 @@ namespace YourNamespace.StockApp
             Console.WriteLine("Введите тикер акции для проверки:");
             var ticker = Console.ReadLine(); // find the state
 
-            using (var context = new TickerContext())
+            using (var context = new TickerContext()) //LINQ to find
             {
-                var todaysCondition = context.TodaysConditions
-                .Include(tc => tc.TickerId)
-                .Where(tc => tc.TickerId == context.Tickers
-                .Where(t => t.TickerSymbol == ticker)
-                .Select(t => t.Id)
-                .FirstOrDefault())
-                .OrderByDescending(tc => tc.Id)
-                .FirstOrDefault();
+                var todaysCondition = context.TodaysConditions //sum TC and Tickers
+     .Join(context.Tickers,
+           tc => tc.TickerId,
+           t => t.Id,
+           (tc, t) => new { TodaysCondition = tc, Ticker = t }) //do that by Id
+     .Where(result => result.Ticker.TickerSymbol == ticker) //try to find ticker
+     .OrderByDescending(result => result.TodaysCondition.Id) //sort
+     .Select(result => result.TodaysCondition) //select TC
+     .FirstOrDefault(); //show
+
 
                 if (todaysCondition != null)
                 {
                     string state = todaysCondition.State;
-                    Console.WriteLine($"Состояние акции для тикера {ticker}: {state}");
+                    Console.WriteLine($"Ticker {ticker}: {state}");
                 }
                 else
                 {
-                    Console.WriteLine($"Для тикера {ticker} нет данных о состоянии акции.");
+                    Console.WriteLine($"For this ticker {ticker} there is no data");
                 }
             }
-            Console.ReadLine();
+           
 
             static List<string> ReadFromFile()
             {
                 List<string> tickers = File.ReadAllLines(@"C:\Users\gkras\OneDrive\Рабочий стол\ticker.txt").ToList();
-                Console.WriteLine("File has been read= " + tickers[1]);
+                Console.WriteLine("File has been read= " + tickers[0]);
                 return tickers;
             }
-            static async Task FillAsync(string ticker)
+            static async Task FillAsync(string ticker) //using two apis
             {
                 string apiUrlFirst = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1697217000&period2=1697217280&interval=1d&events=history&includeAdjustedClose=true"; ;
                 string apiUrlSecond = $"https://query1.finance.yahoo.com/v7/finance/download/{ticker}?period1=1697217290&period2=1697218290&interval=1d&events=history&includeAdjustedClose=true"; ;
                 decimal firstPrice = 0;
                 decimal secondPrice = 0;
 
-                using (HttpClient client = new HttpClient())
+                using (HttpClient client = new HttpClient()) //first price
                 {
                     string responseBody = await client.GetStringAsync(apiUrlFirst);
                     string[] lines = responseBody.Split('\n');
@@ -115,7 +120,7 @@ namespace YourNamespace.StockApp
                     }
                 }
 
-                using (HttpClient client = new HttpClient())
+                using (HttpClient client = new HttpClient()) //second price
                 {
                     string responseBody = await client.GetStringAsync(apiUrlSecond);
                     string[] lines = responseBody.Split('\n');
@@ -130,7 +135,7 @@ namespace YourNamespace.StockApp
                     }
                 }
 
-                using (var context = new TickerContext())
+                using (var context = new TickerContext()) //adding data
                 {
                     var newTicker = new Ticker { TickerSymbol = ticker };
                     context.Tickers.Add(newTicker);
